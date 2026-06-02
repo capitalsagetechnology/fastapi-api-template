@@ -68,7 +68,6 @@ services:
       - .env
     volumes:
       - .:/app
-      - /app/.venv
     command: alembic upgrade head
 
   api:

@@ -36,7 +36,9 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
 
     # CORS Origins
-    BACKEND_CORS_ORIGINS: Annotated[List[str], BeforeValidator(parse_cors_origins)] = []
+    BACKEND_CORS_ORIGINS: Annotated[
+        str | List[str], BeforeValidator(parse_cors_origins)
+    ] = []
 
     # Security
     SECRET_KEY: str = "super-secret-key-change-in-production-1234567890!"
@@ -89,7 +91,9 @@ class Settings(BaseSettings):
     )
 
     # Logging Middleware
-    SENSITIVE_KEYS: Annotated[List[str], BeforeValidator(parse_sensitive_keys)] = [
+    SENSITIVE_KEYS: Annotated[
+        str | List[str], BeforeValidator(parse_sensitive_keys)
+    ] = [
         "password",
         "password_confirm",
         "token",
@@ -101,7 +105,7 @@ class Settings(BaseSettings):
         "credit_card",
     ]
 
-    ALLOWED_IPS: Annotated[List[str], BeforeValidator(parse_cors_origins)] = [
+    ALLOWED_IPS: Annotated[str | List[str], BeforeValidator(parse_cors_origins)] = [
         "127.0.0.1",
         "::1",
     ]

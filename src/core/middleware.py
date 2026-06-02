@@ -38,6 +38,11 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         # 1. Start timing the request
         start_time = time.perf_counter()
 
+        # Determine if logging should be skipped (GET requests to storage/assets management API)
+        skip_logging = request.method == "GET" and request.url.path.startswith(
+            "/api/v1/assets"
+        )
+
         # 2. Extract Client IP (handling reverse proxies like Cloudflare/Nginx)
         ip_address = request.headers.get("x-forwarded-for")
         if ip_address:
@@ -48,7 +53,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
         # 3. Read and cache the request body for POST/PUT/PATCH requests
         req_body = b""
-        if request.method in ("POST", "PUT", "PATCH"):
+        if not skip_logging and request.method in ("POST", "PUT", "PATCH"):
             # Ensure we don't block if there is no body or it's a large stream
             content_length = request.headers.get("content-length")
             is_multipart = "multipart/form-data" in request.headers.get(
@@ -76,10 +81,11 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
         except Exception as exc:
             duration = time.perf_counter() - start_time
-            logger.error(
-                f"HTTP Exception | IP: {ip_address} | {request.method} {request.url.path} | "
-                f"Duration: {duration:.4f}s | Error: {str(exc)}"
-            )
+            if not skip_logging:
+                logger.error(
+                    f"HTTP Exception | IP: {ip_address} | {request.method} {request.url.path} | "
+                    f"Duration: {duration:.4f}s | Error: {str(exc)}"
+                )
             raise exc
 
         # 5. Calculate execution duration
@@ -90,7 +96,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         content_type = response.headers.get("content-type", "")
         is_loggable_response = "json" in content_type or "text" in content_type
 
-        if is_loggable_response:
+        if is_loggable_response and not skip_logging:
             if hasattr(response, "body"):
                 res_body = response.body
             else:
@@ -99,26 +105,27 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                 res_body = b"".join(response_body_chunks)
                 response.body_iterator = AsyncIteratorWrapper(response_body_chunks)
 
-        # 7. Format bodies for logging (masking is done automatically by Formatter)
-        req_body_str = (
-            req_body.decode("utf-8", errors="ignore")
-            if req_body
-            else "[empty or multipart]"
-        )
-        res_body_str = (
-            res_body.decode("utf-8", errors="ignore")
-            if res_body
-            else "[binary or empty]"
-        )
+        if not skip_logging:
+            # 7. Format bodies for logging (masking is done automatically by Formatter)
+            req_body_str = (
+                req_body.decode("utf-8", errors="ignore")
+                if req_body
+                else "[empty or multipart]"
+            )
+            res_body_str = (
+                res_body.decode("utf-8", errors="ignore")
+                if res_body
+                else "[binary or empty]"
+            )
 
-        # Limit logged response length to avoid huge log size on massive responses
-        if len(res_body_str) > 5000:
-            res_body_str = res_body_str[:5000] + "... [TRUNCATED]"
+            # Limit logged response length to avoid huge log size on massive responses
+            if len(res_body_str) > 5000:
+                res_body_str = res_body_str[:5000] + "... [TRUNCATED]"
 
-        logger.info(
-            f"HTTP {response.status_code} | IP: {ip_address} | {request.method} {request.url.path} | "
-            f"Duration: {duration:.4f}s | "
-            f"Req Body: {req_body_str} | Res Body: {res_body_str}"
-        )
+            logger.info(
+                f"HTTP {response.status_code} | IP: {ip_address} | {request.method} {request.url.path} | "
+                f"Duration: {duration:.4f}s | "
+                f"Req Body: {req_body_str} | Res Body: {res_body_str}"
+            )
 
         return response

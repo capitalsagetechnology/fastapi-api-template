@@ -5,7 +5,8 @@ FROM python:3.13-slim AS builder
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     UV_LINK_MODE=copy \
-    UV_COMPILE_BYTECODE=1
+    UV_COMPILE_BYTECODE=1 \
+    UV_PROJECT_ENVIRONMENT=/venv
 
 # Install build dependencies and apply security updates
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
@@ -29,7 +30,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 FROM python:3.13-slim
 
 # Configure runtime environment
-ENV PATH="/app/.venv/bin:$PATH" \
+ENV PATH="/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     DEBIAN_FRONTEND=noninteractive
@@ -46,7 +47,7 @@ RUN groupadd -r -g 10001 appgroup && \
 WORKDIR /app
 
 # Copy virtualenv from builder with secure permissions (owned by root, read-only by appuser)
-COPY --from=builder --chown=root:root /app/.venv /app/.venv
+COPY --from=builder --chown=root:root /venv /venv
 
 # Copy application source code (owned by root, read-only by appuser to prevent runtime mutation)
 COPY --chown=root:root . .
