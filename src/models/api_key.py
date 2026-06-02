@@ -5,6 +5,7 @@ from typing import List, Optional
 from sqlalchemy import JSON, Column
 from sqlmodel import Field, Relationship
 
+from src.core.security import uuid7
 from src.models.base import TimestampModel
 from src.models.user import User
 
@@ -13,7 +14,7 @@ class APIKey(TimestampModel, table=True):
     __tablename__ = "api_keys"
 
     id: uuid.UUID = Field(
-        default_factory=uuid.uuid4, primary_key=True, index=True, nullable=False
+        default_factory=uuid7, primary_key=True, index=True, nullable=False
     )
     name: str = Field(nullable=False)
     prefix: str = Field(nullable=False, index=True)

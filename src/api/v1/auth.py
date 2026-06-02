@@ -1,6 +1,7 @@
+import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, Form, HTTPException, status
 from pydantic import BaseModel, EmailStr
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -8,27 +9,6 @@ from src.api.deps import RoleChecker, get_current_user
 from src.core.database import get_db
 from src.models.user import User
 from src.services.auth import AuthService, session_manager
-
-
-class OAuth2PasswordRequestFormCustom:
-    """Custom request form to bypass strict grant_type validation during logins."""
-
-    def __init__(
-        self,
-        username: str = Form(...),
-        password: str = Form(...),
-        grant_type: Optional[str] = Form(default=None),
-        scope: str = Form(default=""),
-        client_id: Optional[str] = Form(default=None),
-        client_secret: Optional[str] = Form(default=None),
-    ):
-        self.username = username
-        self.password = password
-        self.grant_type = grant_type
-        self.scope = scope
-        self.client_id = client_id
-        self.client_secret = client_secret
-
 
 router = APIRouter()
 
@@ -53,19 +33,52 @@ class InviteRequest(BaseModel):
     roles: List[str]
 
 
-class InviteResponse(BaseModel):
-    id: str
+class InviteResponseNew(BaseModel):
+    id: uuid.UUID
     email: str
-    roles: List[str]
-    expires_at: str
+
+
+class ReInviteRequest(BaseModel):
+    email: EmailStr
+
+
+class ValidateTokenRequest(BaseModel):
+    user_id: uuid.UUID
+    token: str
+
+
+class SetPasswordRequest(BaseModel):
+    user_id: uuid.UUID
+    token: str
+    password: str
 
 
 class UserOut(BaseModel):
-    id: str
+    id: uuid.UUID
     email: str
     roles: List[str]
     is_active: bool
     profile_image: Optional[str] = None
+
+
+class OAuth2PasswordRequestFormCustom:
+    """Custom request form to bypass strict grant_type validation during logins."""
+
+    def __init__(
+        self,
+        username: str = Form(...),
+        password: str = Form(...),
+        grant_type: Optional[str] = Form(default=None),
+        scope: str = Form(default=""),
+        client_id: Optional[str] = Form(default=None),
+        client_secret: Optional[str] = Form(default=None),
+    ):
+        self.username = username
+        self.password = password
+        self.grant_type = grant_type
+        self.scope = scope
+        self.client_id = client_id
+        self.client_secret = client_secret
 
 
 @router.post("/login", response_model=Token)
@@ -115,7 +128,8 @@ async def logout(current_user: User = Depends(get_current_user)):
 
 @router.post(
     "/invite",
-    response_model=InviteResponse,
+    response_model=InviteResponseNew,
+    status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(RoleChecker(allowed_roles=["ADMIN"]))],
 )
 async def invite_user(
@@ -123,16 +137,16 @@ async def invite_user(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Admin-only endpoint to invite a new user with specific access roles."""
+    """Admin-only endpoint to invite a new user and generate verification OTP."""
     try:
-        invitation = await AuthService.create_user_invitation(
+        user = await AuthService.create_user_invitation(
             db=db, admin_user=current_user, email=payload.email, roles=payload.roles
         )
-        return InviteResponse(
-            id=str(invitation.id),
-            email=invitation.email,
-            roles=invitation.roles,
-            expires_at=invitation.expires_at.isoformat(),
+        return InviteResponseNew(id=user.id, email=user.email)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
         )
     except Exception as e:
         raise HTTPException(
@@ -141,40 +155,73 @@ async def invite_user(
         )
 
 
-@router.post("/register-invite", response_model=UserOut)
-async def register_from_invite(
-    token: str = Form(..., description="Unique invitation token"),
-    password: str = Form(..., description="Desired user password"),
-    profile_image: Optional[UploadFile] = File(
-        None, description="Optional profile photo"
-    ),
+@router.post(
+    "/re-invite",
+    response_model=InviteResponseNew,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(RoleChecker(allowed_roles=["ADMIN"]))],
+)
+async def re_invite_user(
+    payload: ReInviteRequest,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Complete account registration by consuming the admin invitation token."""
-    profile_image_bytes = None
-    profile_image_filename = None
-    profile_image_content_type = None
-
-    if profile_image:
-        profile_image_bytes = await profile_image.read()
-        profile_image_filename = profile_image.filename
-        profile_image_content_type = profile_image.content_type
-
+    """Admin-only endpoint to re-invite a user who hasn't verified their password yet."""
     try:
-        user = await AuthService.register_from_invitation(
-            db=db,
-            token=token,
-            password=password,
-            profile_image_bytes=profile_image_bytes,
-            profile_image_filename=profile_image_filename,
-            profile_image_content_type=profile_image_content_type,
+        user = await AuthService.re_invite_user(
+            db=db, admin_user=current_user, email=payload.email
         )
-        return UserOut(
-            id=str(user.id),
-            email=user.email,
-            roles=user.roles,
-            is_active=user.is_active,
-            profile_image=user.profile_image,
-        )
+        return InviteResponseNew(id=user.id, email=user.email)
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to re-invite user: {str(e)}",
+        )
+
+
+@router.post("/validate-token")
+async def validate_token(
+    payload: ValidateTokenRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Validate if the invitation verification OTP code is active and valid."""
+    is_valid = await AuthService.validate_token(
+        db=db, user_id=payload.user_id, token=payload.token
+    )
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired token.",
+        )
+    return {"detail": "Token is valid"}
+
+
+@router.post("/set-password")
+async def set_password(
+    payload: SetPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Set the user's password using a valid invitation verification OTP code."""
+    try:
+        await AuthService.set_password_via_token(
+            db=db,
+            user_id=payload.user_id,
+            token=payload.token,
+            password=payload.password,
+        )
+        return {"detail": "Password set successfully"}
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to set password: {str(e)}",
+        )

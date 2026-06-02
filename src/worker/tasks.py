@@ -85,3 +85,53 @@ def log_to_mongodb_task(log_data: dict) -> None:
         collection.insert_one(log_data)
     except Exception as e:
         logger.error(f"Failed to write log to MongoDB: {e}")
+
+
+@celery_app.task(name="tasks.send_invite_otp_email")
+def send_invite_otp_email_task(email: str, token: str, expires_at: str) -> bool:
+    """Celery background task to dispatch HTML invitation emails with OTP token."""
+    logger.info(
+        f"Starting Celery background task: sending OTP invitation email to {email}"
+    )
+    context = {
+        "token": token,
+        "expires_at": expires_at,
+    }
+    return send_html_email(
+        to_email=email,
+        subject="Your Invitation Verification Code",
+        template_name="email/token_invite.html",
+        context=context,
+    )
+
+
+@celery_app.task(name="tasks.cleanup_expired_tokens")
+def cleanup_expired_tokens_task() -> int:
+    """Celery periodic task to delete expired tokens from database."""
+    logger.info("Starting Celery background task: cleaning up expired tokens")
+    try:
+        import asyncio
+        from datetime import datetime, timezone
+
+        from sqlmodel import select
+
+        from src.core.database import async_session_maker
+        from src.models.user import Token as TokenModel
+
+        async def _cleanup() -> int:
+            async with async_session_maker() as session:
+                now = datetime.now(timezone.utc)
+                stmt = select(TokenModel).where(TokenModel.expires_at < now)
+                result = await session.exec(stmt)
+                expired_tokens = result.all()
+                count = len(expired_tokens)
+                for t in expired_tokens:
+                    await session.delete(t)
+                if count > 0:
+                    await session.commit()
+                return count
+
+        return asyncio.run(_cleanup())
+    except Exception as e:
+        logger.error(f"Failed to cleanup expired tokens: {e}")
+        return 0

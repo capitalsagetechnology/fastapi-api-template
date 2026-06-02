@@ -8,10 +8,15 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from src.core.config import settings
-from src.core.security import create_access_token, get_password_hash, verify_password
-from src.models.user import Invitation, User
-from src.services.s3 import s3_service
-from src.worker.tasks import send_invitation_email_task, send_welcome_email_task
+from src.core.security import (
+    create_access_token,
+    generate_totp_7_digit,
+    get_password_hash,
+    verify_password,
+)
+from src.models.user import Token as TokenModel
+from src.models.user import User
+from src.worker.tasks import send_invite_otp_email_task, send_welcome_email_task
 
 logger = logging.getLogger("services.auth")
 
@@ -51,7 +56,7 @@ session_manager = RedisSessionManager()
 
 async def seed_first_superuser(db: AsyncSession) -> None:
     """Seed the initial ADMIN user using settings config."""
-    email = settings.FIRST_SUPERUSER_EMAIL
+    email = settings.FIRST_SUPERUSER_EMAIL.strip().lower()
     # Check if any user exists with this email
     stmt = select(User).where(User.email == email)
     existing_user = (await db.exec(stmt)).one_or_none()
@@ -63,6 +68,7 @@ async def seed_first_superuser(db: AsyncSession) -> None:
             hashed_password=get_password_hash(settings.FIRST_SUPERUSER_PASSWORD),
             roles=["ADMIN"],
             is_active=True,
+            is_verified=True,
         )
         db.add(admin_user)
         await db.commit()
@@ -77,15 +83,27 @@ class AuthService:
         db: AsyncSession, email: str, password: str
     ) -> Optional[User]:
         """Authenticate user against email and password. Returns User if valid."""
-        stmt = select(User).where(User.email == email)
+        # Normalize email before lookup
+        email_normalized = email.strip().lower()
+        stmt = select(User).where(User.email == email_normalized)
         user = (await db.exec(stmt)).one_or_none()
 
         if not user:
             return None
-        if not verify_password(password, user.hashed_password):
+        if not user.hashed_password or not verify_password(
+            password, user.hashed_password
+        ):
             return None
         if not user.is_active:
             return None
+        if not user.is_verified:
+            return None
+
+        # Track last login
+        user.last_login = datetime.now(timezone.utc)
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
         return user
 
     @staticmethod
@@ -102,102 +120,179 @@ class AuthService:
     @staticmethod
     async def create_user_invitation(
         db: AsyncSession, admin_user: User, email: str, roles: List[str]
-    ) -> Invitation:
-        """Create a secure invitation token in database and trigger Celery task to email it."""
-        # 1. Create secure token
-        token = uuid.uuid4().hex
-        expires_at = datetime.now(timezone.utc) + timedelta(
-            days=7
-        )  # Invitation valid for 7 days
-
-        invitation = Invitation(
-            email=email,
-            token=token,
-            roles=roles,
-            expires_at=expires_at,
-            created_by_id=admin_user.id,
-        )
-        db.add(invitation)
-        await db.commit()
-        await db.refresh(invitation)
-
-        # 2. Trigger Celery worker to send email
-        invite_url = f"http://localhost:8000/api/v1/auth/register-invite?token={token}"
-        expires_str = expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")
-
-        # Dispatch Celery background task
-        send_invitation_email_task.delay(
-            email=email, invite_url=invite_url, expires_at=expires_str, roles=roles
-        )
-
-        logger.info(f"Created invitation for {email} by admin {admin_user.email}")
-        return invitation
-
-    @staticmethod
-    async def register_from_invitation(
-        db: AsyncSession,
-        token: str,
-        password: str,
-        profile_image_bytes: Optional[bytes] = None,
-        profile_image_filename: Optional[str] = None,
-        profile_image_content_type: Optional[str] = None,
     ) -> User:
-        """Complete user registration from an invitation token."""
-        # 1. Retrieve and validate the invitation token
-        stmt = select(Invitation).where(Invitation.token == token)
-        invitation = (await db.exec(stmt)).one_or_none()
+        """Create a new User and a unique 7-digit OTP verification token, then send it via Celery."""
+        # 1. Normalize email
+        email_normalized = email.strip().lower()
 
-        if not invitation:
-            raise ValueError("Invalid invitation token.")
-        if invitation.accepted_at:
-            raise ValueError("Invitation has already been accepted.")
-        if datetime.now(timezone.utc) > invitation.expires_at.replace(
-            tzinfo=timezone.utc
-        ):
-            raise ValueError("Invitation has expired.")
-
-        # Validate password length when setting it
-        if len(password) < 8:
-            raise ValueError("Password must be at least 8 characters long.")
-
-        # 2. Check if a user with that email already exists
-        user_stmt = select(User).where(User.email == invitation.email)
-        if (await db.exec(user_stmt)).one_or_none():
+        # Check if user already exists
+        stmt = select(User).where(User.email == email_normalized)
+        existing_user = (await db.exec(stmt)).one_or_none()
+        if existing_user:
             raise ValueError("User with this email already exists.")
 
-        # 3. Handle optional profile image upload to S3
-        profile_image_url = None
-        if (
-            profile_image_bytes
-            and profile_image_filename
-            and profile_image_content_type
-        ):
-            profile_image_url = await s3_service.upload_file(
-                file_content=profile_image_bytes,
-                filename=profile_image_filename,
-                content_type=profile_image_content_type,
-            )
-
-        # 4. Create new user
+        # 2. Create User record (unverified, no password set yet)
         new_user = User(
-            email=invitation.email,
-            hashed_password=get_password_hash(password),
-            roles=invitation.roles,
+            email=email_normalized,
+            roles=roles,
             is_active=True,
-            profile_image=profile_image_url,
+            is_verified=False,
+            hashed_password=None,
         )
         db.add(new_user)
+        await db.flush()  # Populates user ID
 
-        # 5. Mark invitation as accepted
-        invitation.accepted_at = datetime.now(timezone.utc)
-        db.add(invitation)
+        # 3. Generate a unique 7-digit OTP token
+        counter_offset = 0
+        while True:
+            otp = generate_totp_7_digit(
+                new_user.id, settings.SECRET_KEY, counter_offset
+            )
+            stmt_token = select(TokenModel).where(TokenModel.token == otp)
+            existing_token = (await db.exec(stmt_token)).first()
+            if not existing_token:
+                break
+            counter_offset += 1
 
+        # 4. Save token to DB
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=30)
+        token_record = TokenModel(
+            user_id=new_user.id,
+            token=otp,
+            expires_at=expires_at,
+        )
+        db.add(token_record)
         await db.commit()
         await db.refresh(new_user)
 
-        # 6. Trigger Celery worker to send Welcome Email
-        login_url = "http://localhost:8000/api/v1/auth/login"
-        send_welcome_email_task.delay(email=new_user.email, login_url=login_url)
+        # 5. Send token over Celery
+        expires_str = expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+        send_invite_otp_email_task.delay(
+            email=new_user.email,
+            token=otp,
+            expires_at=expires_str,
+        )
 
-        logger.info(f"User {new_user.email} registered successfully from invitation.")
+        logger.info(
+            f"Created invitation for {new_user.email} (ID: {new_user.id}) by admin {admin_user.email}"
+        )
         return new_user
+
+    @staticmethod
+    async def re_invite_user(db: AsyncSession, admin_user: User, email: str) -> User:
+        """Re-invite an existing user who has not yet verified their password."""
+        email_normalized = email.strip().lower()
+        stmt = select(User).where(User.email == email_normalized)
+        user = (await db.exec(stmt)).one_or_none()
+
+        if not user:
+            raise ValueError("User not found.")
+        if user.is_verified:
+            raise ValueError("User has already set a password and is verified.")
+
+        # Delete any existing active/expired tokens for this user first
+        stmt_del = select(TokenModel).where(TokenModel.user_id == user.id)
+        existing_tokens = (await db.exec(stmt_del)).all()
+        deleted_tokens = [t.token for t in existing_tokens]
+        for t in existing_tokens:
+            await db.delete(t)
+        await db.flush()
+
+        # Generate a new unique 7-digit OTP token
+        counter_offset = 0
+        while True:
+            otp = generate_totp_7_digit(user.id, settings.SECRET_KEY, counter_offset)
+            if otp in deleted_tokens:
+                counter_offset += 1
+                continue
+            stmt_token = select(TokenModel).where(TokenModel.token == otp)
+            existing_token = (await db.exec(stmt_token)).first()
+            if not existing_token:
+                break
+            counter_offset += 1
+
+        # Save token to DB
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=30)
+        token_record = TokenModel(
+            user_id=user.id,
+            token=otp,
+            expires_at=expires_at,
+        )
+        db.add(token_record)
+        await db.commit()
+
+        # Send token over Celery
+        expires_str = expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+        send_invite_otp_email_task.delay(
+            email=user.email,
+            token=otp,
+            expires_at=expires_str,
+        )
+
+        logger.info(
+            f"Re-invited user {user.email} (ID: {user.id}) by admin {admin_user.email}"
+        )
+        return user
+
+    @staticmethod
+    async def validate_token(db: AsyncSession, user_id: uuid.UUID, token: str) -> bool:
+        """Validate if the invitation/verification token is valid and active."""
+        stmt = select(TokenModel).where(
+            TokenModel.user_id == user_id,
+            TokenModel.token == token,
+        )
+        token_record = (await db.exec(stmt)).one_or_none()
+        if not token_record:
+            return False
+        if datetime.now(timezone.utc) > token_record.expires_at.replace(
+            tzinfo=timezone.utc
+        ):
+            return False
+        return True
+
+    @staticmethod
+    async def set_password_via_token(
+        db: AsyncSession, user_id: uuid.UUID, token: str, password: str
+    ) -> User:
+        """Verify the token, set the user's password, activate their account, and delete the token."""
+        stmt = select(TokenModel).where(
+            TokenModel.user_id == user_id,
+            TokenModel.token == token,
+        )
+        token_record = (await db.exec(stmt)).one_or_none()
+        if not token_record:
+            raise ValueError("Invalid verification token.")
+        if datetime.now(timezone.utc) > token_record.expires_at.replace(
+            tzinfo=timezone.utc
+        ):
+            raise ValueError("Verification token has expired.")
+
+        # Retrieve user
+        stmt_user = select(User).where(User.id == user_id)
+        user = (await db.exec(stmt_user)).one_or_none()
+        if not user:
+            raise ValueError("User not found.")
+
+        # Validate password
+        if len(password) < 8:
+            raise ValueError("Password must be at least 8 characters long.")
+
+        # Update user password and mark as verified
+        user.hashed_password = get_password_hash(password)
+        user.is_verified = True
+        db.add(user)
+
+        # Delete token
+        await db.delete(token_record)
+
+        await db.commit()
+        await db.refresh(user)
+
+        # Trigger welcome email task
+        login_url = "http://localhost:8000/api/v1/auth/login"
+        send_welcome_email_task.delay(email=user.email, login_url=login_url)
+
+        logger.info(
+            f"User {user.email} (ID: {user.id}) successfully verified their account and set their password."
+        )
+        return user

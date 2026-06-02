@@ -89,7 +89,6 @@ async def client(db_session, monkeypatch):
 
     # 3. Mock S3 storage operations
     mock_s3 = MockS3Service()
-    monkeypatch.setattr("src.services.auth.s3_service", mock_s3)
     monkeypatch.setattr("src.api.v1.users.s3_service", mock_s3)
     monkeypatch.setattr("src.api.v1.assets.s3_service", mock_s3)
 
@@ -98,7 +97,7 @@ async def client(db_session, monkeypatch):
     mock_welcome_task = MagicMock()
     mock_log_task = MagicMock()
     monkeypatch.setattr(
-        "src.services.auth.send_invitation_email_task.delay", mock_invite_task
+        "src.services.auth.send_invite_otp_email_task.delay", mock_invite_task
     )
     monkeypatch.setattr(
         "src.services.auth.send_welcome_email_task.delay", mock_welcome_task

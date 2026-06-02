@@ -149,6 +149,26 @@ services:
       - .:/app
     command: celery -A src.worker.celery_app.celery_app worker --loglevel=info -Q logging
 
+  beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    command: celery -A src.worker.celery_app.celery_app beat --loglevel=info
+
   flower:
     build:
       context: .
