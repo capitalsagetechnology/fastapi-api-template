@@ -21,8 +21,7 @@ async def test_admin_seeding(db_session):
 
     # Query seeded admin
     stmt = select(User).where(User.email == settings.FIRST_SUPERUSER_EMAIL)
-    result = await db_session.execute(stmt)
-    admin = result.scalar_one_or_none()
+    admin = (await db_session.exec(stmt)).one_or_none()
 
     assert admin is not None
     assert admin.email == settings.FIRST_SUPERUSER_EMAIL
@@ -40,7 +39,7 @@ async def test_authentication_flow(client, db_session):
         "username": settings.FIRST_SUPERUSER_EMAIL,
         "password": settings.FIRST_SUPERUSER_PASSWORD,
     }
-    response = await client.post("/api/v1/auth/login", data=login_data)
+    response = await client.post("/api/v1/auth/login", json=login_data)
     assert response.status_code == 200
     token_data = response.json()
     assert "access_token" in token_data
@@ -76,7 +75,7 @@ async def test_user_invitation_by_admin(client, db_session):
         "username": settings.FIRST_SUPERUSER_EMAIL,
         "password": settings.FIRST_SUPERUSER_PASSWORD,
     }
-    login_res = await client.post("/api/v1/auth/login", data=login_data)
+    login_res = await client.post("/api/v1/auth/login", json=login_data)
     admin_token = login_res.json()["access_token"]
 
     # 1. Invite request (admin)
@@ -108,7 +107,7 @@ async def test_registration_via_invitation(client, db_session):
         "username": settings.FIRST_SUPERUSER_EMAIL,
         "password": settings.FIRST_SUPERUSER_PASSWORD,
     }
-    login_res = await client.post("/api/v1/auth/login", data=login_data)
+    login_res = await client.post("/api/v1/auth/login", json=login_data)
     admin_token = login_res.json()["access_token"]
 
     invite_payload = {"email": "agent@example.com", "roles": ["AGENT"]}
@@ -121,11 +120,16 @@ async def test_registration_via_invitation(client, db_session):
 
     # Query invitation token from SQLite test DB
     stmt = select(Invitation).where(Invitation.email == "agent@example.com")
-    res = await db_session.execute(stmt)
-    invitation = res.scalar_one()
+    invitation = (await db_session.exec(stmt)).one()
     invite_token = invitation.token
 
     # 2. User registers using invite token (includes profile image upload mock)
+    # Try registering with a short password first (should fail 400)
+    short_form = {"token": invite_token, "password": "short"}
+    short_res = await client.post("/api/v1/auth/register-invite", data=short_form)
+    assert short_res.status_code == 400
+    assert "Password must be at least" in short_res.json()["detail"]
+
     # Prepare multipart form fields
     form_data = {"token": invite_token, "password": "SecureAgentPassword123!"}
     file_payload = {
@@ -146,8 +150,7 @@ async def test_registration_via_invitation(client, db_session):
 
     # Verify invitation token is consumed
     stmt = select(Invitation).where(Invitation.token == invite_token)
-    res = await db_session.execute(stmt)
-    invitation = res.scalar_one()
+    invitation = (await db_session.exec(stmt)).one()
     assert invitation.accepted_at is not None
 
 
@@ -158,7 +161,7 @@ async def test_central_asset_upload(client, db_session):
         "username": settings.FIRST_SUPERUSER_EMAIL,
         "password": settings.FIRST_SUPERUSER_PASSWORD,
     }
-    login_res = await client.post("/api/v1/auth/login", data=login_data)
+    login_res = await client.post("/api/v1/auth/login", json=login_data)
     token = login_res.json()["access_token"]
 
     file_payload = {"file": ("document.pdf", b"fake-pdf-content", "application/pdf")}
@@ -198,7 +201,7 @@ async def test_scoped_api_key_access(client, db_session):
         "username": settings.FIRST_SUPERUSER_EMAIL,
         "password": settings.FIRST_SUPERUSER_PASSWORD,
     }
-    login_res = await client.post("/api/v1/auth/login", data=login_data)
+    login_res = await client.post("/api/v1/auth/login", json=login_data)
     token = login_res.json()["access_token"]
 
     # 1. Create API key with scope assets:audit
@@ -244,3 +247,44 @@ async def test_scoped_api_key_access(client, db_session):
     )
     assert insufficient_res.status_code == 403
     assert "lacks required scopes" in insufficient_res.json()["detail"]
+
+
+async def test_logging_middleware_get_exclusion_and_post_inclusion(client, db_session):
+    """Verify that HTTP GET requests do not trigger logging to MongoDB, but POST requests do."""
+    # Reset call counts
+    client.log_mock_task.reset_mock()
+
+    # 1. Trigger GET request (should bypass logging)
+    get_res = await client.get("/health")
+    assert get_res.status_code == 200
+    client.log_mock_task.assert_not_called()
+
+    # 2. Trigger POST request (should invoke Celery logging task)
+    post_res = await client.post(
+        "/api/v1/auth/login", json={"username": "dummy", "password": "pwd"}
+    )
+    # Status code will be 401 Unauthorized but the middleware should still log and dispatch to Celery
+    assert post_res.status_code == 401
+    client.log_mock_task.assert_called_once()
+
+    # Check that the dispatch payload has the correct data
+    called_payload = client.log_mock_task.call_args[0][0]
+    assert called_payload["method"] == "POST"
+    assert called_payload["path"] == "/api/v1/auth/login"
+    assert called_payload["status_code"] == 401
+    assert "timestamp" in called_payload
+
+
+async def test_oauth2_token_endpoint(client, db_session):
+    """Verify that the OAuth2 Form Data login /api/v1/auth/token endpoint functions correctly."""
+    await seed_first_superuser(db_session)
+    login_data = {
+        "username": settings.FIRST_SUPERUSER_EMAIL,
+        "password": settings.FIRST_SUPERUSER_PASSWORD,
+    }
+    # Form data request
+    response = await client.post("/api/v1/auth/token", data=login_data)
+    assert response.status_code == 200
+    token_data = response.json()
+    assert "access_token" in token_data
+    assert token_data["token_type"] == "bearer"

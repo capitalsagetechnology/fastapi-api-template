@@ -57,6 +57,19 @@ services:
       timeout: 5s
       retries: 5
 
+  mongodb:
+    image: mongo:7.0
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   migrator:
     build:
       context: .
@@ -84,6 +97,8 @@ services:
         condition: service_healthy
       localstack:
         condition: service_healthy
+      mongodb:
+        condition: service_healthy
       migrator:
         condition: service_completed_successfully
     env_file:
@@ -110,7 +125,29 @@ services:
       - .env
     volumes:
       - .:/app
-    command: celery -A src.worker.celery_app.celery_app worker --loglevel=info
+    command: celery -A src.worker.celery_app.celery_app worker --loglevel=info -Q celery
+
+  logging_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    command: celery -A src.worker.celery_app.celery_app worker --loglevel=info -Q logging
 
   flower:
     build:
@@ -135,3 +172,4 @@ volumes:
   redis_data:
   rabbitmq_data:
   localstack_data:
+  mongodb_data:

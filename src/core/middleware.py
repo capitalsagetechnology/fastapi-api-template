@@ -1,9 +1,13 @@
+import json
 import logging
 import time
+from datetime import datetime, timezone
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
+
+from src.worker.tasks import log_to_mongodb_task
 
 logger = logging.getLogger("api.middleware")
 
@@ -38,10 +42,8 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         # 1. Start timing the request
         start_time = time.perf_counter()
 
-        # Determine if logging should be skipped (GET requests to storage/assets management API)
-        skip_logging = request.method == "GET" and request.url.path.startswith(
-            "/api/v1/assets"
-        )
+        # Determine if logging should be skipped (all GET requests)
+        skip_logging = request.method == "GET"
 
         # 2. Extract Client IP (handling reverse proxies like Cloudflare/Nginx)
         ip_address = request.headers.get("x-forwarded-for")
@@ -106,26 +108,48 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                 response.body_iterator = AsyncIteratorWrapper(response_body_chunks)
 
         if not skip_logging:
-            # 7. Format bodies for logging (masking is done automatically by Formatter)
-            req_body_str = (
-                req_body.decode("utf-8", errors="ignore")
-                if req_body
-                else "[empty or multipart]"
-            )
-            res_body_str = (
-                res_body.decode("utf-8", errors="ignore")
-                if res_body
-                else "[binary or empty]"
-            )
+            # 7. Try to parse bodies as JSON (to avoid escaped string logging)
+            req_body_obj = None
+            if req_body:
+                try:
+                    req_body_obj = json.loads(req_body.decode("utf-8", errors="ignore"))
+                except Exception:
+                    req_body_obj = req_body.decode("utf-8", errors="ignore")
+            else:
+                req_body_obj = "[empty or multipart]"
 
-            # Limit logged response length to avoid huge log size on massive responses
-            if len(res_body_str) > 5000:
-                res_body_str = res_body_str[:5000] + "... [TRUNCATED]"
+            res_body_obj = None
+            if res_body:
+                try:
+                    res_body_obj = json.loads(res_body.decode("utf-8", errors="ignore"))
+                except Exception:
+                    res_body_obj = res_body.decode("utf-8", errors="ignore")
+            else:
+                res_body_obj = "[binary or empty]"
 
-            logger.info(
-                f"HTTP {response.status_code} | IP: {ip_address} | {request.method} {request.url.path} | "
-                f"Duration: {duration:.4f}s | "
-                f"Req Body: {req_body_str} | Res Body: {res_body_str}"
-            )
+            # Limit logged response length if it is a string
+            if isinstance(res_body_obj, str) and len(res_body_obj) > 5000:
+                res_body_obj = res_body_obj[:5000] + "... [TRUNCATED]"
+
+            # Build the base log payload
+            log_payload = {
+                "status_code": response.status_code,
+                "ip_address": ip_address,
+                "method": request.method,
+                "path": request.url.path,
+                "duration_seconds": round(duration, 4),
+                "request_body": req_body_obj,
+                "response_body": res_body_obj,
+            }
+
+            # Log to console as a structured JSON string
+            logger.info(json.dumps(log_payload))
+
+            # Dispatch to MongoDB over Celery (including timestamp)
+            task_payload = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                **log_payload,
+            }
+            log_to_mongodb_task.delay(task_payload)
 
         return response

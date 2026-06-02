@@ -54,8 +54,7 @@ async def seed_first_superuser(db: AsyncSession) -> None:
     email = settings.FIRST_SUPERUSER_EMAIL
     # Check if any user exists with this email
     stmt = select(User).where(User.email == email)
-    result = await db.execute(stmt)
-    existing_user = result.scalar_one_or_none()
+    existing_user = (await db.exec(stmt)).one_or_none()
 
     if not existing_user:
         logger.info(f"Seeding admin user: {email}...")
@@ -79,8 +78,7 @@ class AuthService:
     ) -> Optional[User]:
         """Authenticate user against email and password. Returns User if valid."""
         stmt = select(User).where(User.email == email)
-        result = await db.execute(stmt)
-        user = result.scalar_one_or_none()
+        user = (await db.exec(stmt)).one_or_none()
 
         if not user:
             return None
@@ -147,8 +145,7 @@ class AuthService:
         """Complete user registration from an invitation token."""
         # 1. Retrieve and validate the invitation token
         stmt = select(Invitation).where(Invitation.token == token)
-        result = await db.execute(stmt)
-        invitation = result.scalar_one_or_none()
+        invitation = (await db.exec(stmt)).one_or_none()
 
         if not invitation:
             raise ValueError("Invalid invitation token.")
@@ -159,10 +156,13 @@ class AuthService:
         ):
             raise ValueError("Invitation has expired.")
 
+        # Validate password length when setting it
+        if len(password) < 8:
+            raise ValueError("Password must be at least 8 characters long.")
+
         # 2. Check if a user with that email already exists
         user_stmt = select(User).where(User.email == invitation.email)
-        user_result = await db.execute(user_stmt)
-        if user_result.scalar_one_or_none():
+        if (await db.exec(user_stmt)).one_or_none():
             raise ValueError("User with this email already exists.")
 
         # 3. Handle optional profile image upload to S3

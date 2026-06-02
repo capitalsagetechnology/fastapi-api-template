@@ -15,8 +15,8 @@ from src.models.api_key import APIKey
 from src.models.user import User
 from src.services.auth import session_manager
 
-# Token url matches our login endpoint
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
+# Token url matches our OAuth2 token endpoint
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/token")
 
 
 async def get_current_user(
@@ -57,8 +57,7 @@ async def get_current_user(
         raise credentials_exception
 
     stmt = select(User).where(User.id == user_uuid)
-    result = await db.execute(stmt)
-    user = result.scalar_one_or_none()
+    user = (await db.exec(stmt)).one_or_none()
 
     if not user:
         raise credentials_exception
@@ -134,8 +133,7 @@ class ScopedAPIKeyChecker:
 
         # Query active key matching the hash
         stmt = select(APIKey).where(APIKey.hashed_key == hashed, APIKey.is_active)
-        result = await db.execute(stmt)
-        api_key_obj = result.scalar_one_or_none()
+        api_key_obj = (await db.exec(stmt)).one_or_none()
 
         if not api_key_obj:
             raise HTTPException(

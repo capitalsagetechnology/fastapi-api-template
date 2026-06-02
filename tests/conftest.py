@@ -96,12 +96,14 @@ async def client(db_session, monkeypatch):
     # 4. Mock Celery email task delays
     mock_invite_task = MagicMock()
     mock_welcome_task = MagicMock()
+    mock_log_task = MagicMock()
     monkeypatch.setattr(
         "src.services.auth.send_invitation_email_task.delay", mock_invite_task
     )
     monkeypatch.setattr(
         "src.services.auth.send_welcome_email_task.delay", mock_welcome_task
     )
+    monkeypatch.setattr("src.core.middleware.log_to_mongodb_task.delay", mock_log_task)
 
     # 5. Build ASGI Transport for HTTPX AsyncClient
     async with AsyncClient(
@@ -110,6 +112,7 @@ async def client(db_session, monkeypatch):
         # Attach mocks dynamically to the client to make assertions easier in tests
         ac.invite_mock_task = mock_invite_task
         ac.welcome_mock_task = mock_welcome_task
+        ac.log_mock_task = mock_log_task
         ac.redis_sessions = mock_redis
         yield ac
 

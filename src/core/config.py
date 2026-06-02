@@ -20,12 +20,6 @@ def parse_cors_origins(v: str | List[str]) -> List[str]:
     return v
 
 
-def parse_sensitive_keys(v: str | List[str]) -> List[str]:
-    if isinstance(v, str):
-        return [i.strip().lower() for i in v.split(",") if i.strip()]
-    return [i.lower() for i in v]
-
-
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", case_sensitive=True, extra="ignore"
@@ -90,20 +84,23 @@ class Settings(BaseSettings):
         "http://localhost:4566"  # Point to LocalStack by default in dev
     )
 
+    # MongoDB Settings
+    MONGO_URL: str = ""
+
     # Logging Middleware
-    SENSITIVE_KEYS: Annotated[
-        str | List[str], BeforeValidator(parse_sensitive_keys)
-    ] = [
-        "password",
-        "password_confirm",
-        "token",
-        "secret",
-        "access_token",
-        "authorization",
-        "api_key",
-        "x-api-key",
-        "credit_card",
-    ]
+    @property
+    def SENSITIVE_KEYS(self) -> List[str]:
+        return [
+            "password",
+            "password_confirm",
+            "token",
+            "secret",
+            "access_token",
+            "authorization",
+            "api_key",
+            "x-api-key",
+            "credit_card",
+        ]
 
     ALLOWED_IPS: Annotated[str | List[str], BeforeValidator(parse_cors_origins)] = [
         "127.0.0.1",

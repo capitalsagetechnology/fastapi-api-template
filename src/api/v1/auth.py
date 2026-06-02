@@ -1,7 +1,6 @@
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -10,6 +9,27 @@ from src.core.database import get_db
 from src.models.user import User
 from src.services.auth import AuthService, session_manager
 
+
+class OAuth2PasswordRequestFormCustom:
+    """Custom request form to bypass strict grant_type validation during logins."""
+
+    def __init__(
+        self,
+        username: str = Form(...),
+        password: str = Form(...),
+        grant_type: Optional[str] = Form(default=None),
+        scope: str = Form(default=""),
+        client_id: Optional[str] = Form(default=None),
+        client_secret: Optional[str] = Form(default=None),
+    ):
+        self.username = username
+        self.password = password
+        self.grant_type = grant_type
+        self.scope = scope
+        self.client_id = client_id
+        self.client_secret = client_secret
+
+
 router = APIRouter()
 
 
@@ -17,6 +37,15 @@ router = APIRouter()
 class Token(BaseModel):
     access_token: str
     token_type: str
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+    grant_type: Optional[str] = None
+    scope: str = ""
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
 
 
 class InviteRequest(BaseModel):
@@ -41,9 +70,28 @@ class UserOut(BaseModel):
 
 @router.post("/login", response_model=Token)
 async def login(
-    db: AsyncSession = Depends(get_db), form_data: OAuth2PasswordRequestForm = Depends()
+    payload: LoginRequest,
+    db: AsyncSession = Depends(get_db),
 ):
     """Authenticate user and establish an active session in Redis."""
+    user = await AuthService.authenticate_user(
+        db=db, email=payload.username, password=payload.password
+    )
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return await AuthService.generate_user_token(user)
+
+
+@router.post("/token", response_model=Token)
+async def login_for_oauth_token(
+    db: AsyncSession = Depends(get_db),
+    form_data: OAuth2PasswordRequestFormCustom = Depends(),
+):
+    """Authenticate user via OAuth2 Form data for Swagger login compatibility."""
     user = await AuthService.authenticate_user(
         db=db, email=form_data.username, password=form_data.password
     )
