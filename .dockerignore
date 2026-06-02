@@ -5,8 +5,6 @@
 # Package manager files
 .venv/
 .uv/
-uv.lock
-pyproject.toml
 
 # Python bytecode caches
 **/__pycache__/
@@ -27,8 +25,6 @@ tests/
 
 # Development tools & pre-commit files
 .pre-commit-config.yaml
-alembic.ini
-alembic/versions/*.py
 
 # Documentation files (not needed in runtime container)
 docs/
