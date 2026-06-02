@@ -1,0 +1,33 @@
+{% extends "email/base.html" %}
+
+{% block title %}Welcome to {{ project_name }}!{% endblock %}
+
+{% block preheader %}Your account has been successfully created.{% endblock %}
+
+{% block content %}
+<h2>Welcome aboard!</h2>
+<p>Your account at <strong>{{ project_name }}</strong> has been set up successfully.</p>
+<p>You can now log in to the dashboard using your email (<code>{{ email }}</code>) and the password you configured.</p>
+
+<table role="presentation" border="0" cellpadding="0" cellspacing="0" class="btn btn-primary">
+    <tbody>
+        <tr>
+            <td align="left">
+                <table role="presentation" border="0" cellpadding="0" cellspacing="0">
+                    <tbody>
+                        <tr>
+                            <td>
+                                <a href="{{ login_url }}" target="_blank">Login to your account</a>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </td>
+        </tr>
+    </tbody>
+</table>
+
+<p>If you have any questions or need support, please contact your administrator.</p>
+<p>Cheers,</p>
+<p>The {{ project_name }} Team</p>
+{% endblock %}

@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <title>{% block title %}{% endblock %}</title>
+    <style>
+        body {
+            background-color: #f4f7f6;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            -webkit-font-smoothing: antialiased;
+            font-size: 16px;
+            line-height: 1.6;
+            margin: 0;
+            padding: 0;
+            -ms-text-size-adjust: 100%;
+            -webkit-text-size-adjust: 100%;
+        }
+        table {
+            border-collapse: separate;
+            mso-table-lspace: 0pt;
+            mso-table-rspace: 0pt;
+            width: 100%;
+        }
+        .container {
+            display: block;
+            margin: 0 auto !important;
+            max-width: 600px;
+            padding: 20px;
+            width: 600px;
+        }
+        .main {
+            background: #ffffff;
+            border-radius: 8px;
+            width: 100%;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            border: 1px solid #e1e8ed;
+        }
+        .wrapper {
+            box-sizing: border-box;
+            padding: 40px;
+        }
+        .header {
+            padding: 20px 0;
+            text-align: center;
+        }
+        .header h1 {
+            color: #2c3e50;
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+        }
+        .footer {
+            clear: both;
+            margin-top: 20px;
+            text-align: center;
+            width: 100%;
+        }
+        .footer td, .footer p, .footer span, .footer a {
+            color: #7f8c8d;
+            font-size: 12px;
+            text-align: center;
+        }
+        h2 {
+            color: #2c3e50;
+            font-weight: 600;
+            line-height: 1.4;
+            margin: 0;
+            margin-bottom: 20px;
+            font-size: 20px;
+        }
+        p {
+            color: #34495e;
+            margin: 0;
+            margin-bottom: 20px;
+        }
+        .btn {
+            box-sizing: border-box;
+            width: 100%;
+        }
+        .btn table {
+            width: auto;
+        }
+        .btn table td {
+            background-color: #3498db;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .btn a {
+            background-color: #3498db;
+            border: solid 1px #3498db;
+            border-radius: 4px;
+            box-sizing: border-box;
+            color: #ffffff;
+            cursor: pointer;
+            display: inline-block;
+            font-size: 16px;
+            font-weight: bold;
+            margin: 0;
+            padding: 12px 25px;
+            text-decoration: none;
+            text-transform: capitalize;
+        }
+        .btn-primary table td {
+            background-color: #4f46e5;
+        }
+        .btn-primary a {
+            background-color: #4f46e5;
+            border-color: #4f46e5;
+        }
+        .preheader {
+            color: transparent;
+            display: none;
+            height: 0;
+            max-height: 0;
+            max-width: 0;
+            opacity: 0;
+            overflow: hidden;
+            mso-hide: all;
+            visibility: hidden;
+            width: 0;
+        }
+    </style>
+</head>
+<body>
+    <span class="preheader">{% block preheader %}{% endblock %}</span>
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0">
+        <tr>
+            <td>&nbsp;</td>
+            <td class="container">
+                <div class="content">
+                    <!-- START HEADER -->
+                    <div class="header">
+                        <table>
+                            <tr>
+                                <td>
+                                    <h1>{{ project_name }}</h1>
+                                </td>
+                            </tr>
+                        </table>
+                    </div>
+                    <!-- END HEADER -->
+
+                    <!-- START CENTERED WHITE CONTAINER -->
+                    <table role="presentation" class="main">
+                        <tr>
+                            <td class="wrapper">
+                                <table role="presentation" border="0" cellpadding="0" cellspacing="0">
+                                    <tr>
+                                        <td>
+                                            {% block content %}{% endblock %}
+                                        </td>
+                                    </tr>
+                                </table>
+                            </td>
+                        </tr>
+                    </table>
+                    <!-- END CENTERED WHITE CONTAINER -->
+
+                    <!-- START FOOTER -->
+                    <div class="footer">
+                        <table role="presentation" border="0" cellpadding="0" cellspacing="0">
+                            <tr>
+                                <td class="content-block">
+                                    <p>Sent by <strong>{{ project_name }}</strong></p>
+                                    <p>If you were not expecting this email, you can safely ignore it.</p>
+                                </td>
+                            </tr>
+                        </table>
+                    </div>
+                    <!-- END FOOTER -->
+
+                </div>
+            </td>
+            <td>&nbsp;</td>
+        </tr>
+    </table>
+</body>
+</html>

@@ -1,0 +1,49 @@
+# Git files
+.git/
+.gitignore
+
+# Package manager files
+.venv/
+.uv/
+uv.lock
+pyproject.toml
+
+# Python bytecode caches
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+
+# Environment configuration secrets
+.env
+.env.example
+.env.*
+
+# Testing caches & coverage report files
+.pytest_cache/
+.coverage
+htmlcov/
+tests/
+
+# Development tools & pre-commit files
+.pre-commit-config.yaml
+alembic.ini
+alembic/versions/*.py
+
+# Documentation files (not needed in runtime container)
+docs/
+README.md
+walkthrough.md
+task.md
+implementation_plan.md
+
+# IDE configurations
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
